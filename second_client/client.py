@@ -374,9 +374,10 @@ class MainWindow:
             if last:
                 text += f"\n{last}"
 
-            item = QListWidgetItem(text)
-            item.setData(Qt.UserRole, peer)
-            self.chatListWidget.addItem(item)
+            if online == "在线":
+                item = QListWidgetItem(text)
+                item.setData(Qt.UserRole, peer)
+                self.chatListWidget.addItem(item)
 
         if self.current_peer is None and self.chatListWidget.count() > 0:
             self.chatListWidget.setCurrentRow(0)
