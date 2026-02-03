@@ -192,6 +192,25 @@
       </rect>
      </property>
     </widget>
+    <widget class="QToolButton" name="loginEyeButton">
+     <property name="geometry">
+      <rect>
+       <x>510</x>
+       <y>220</y>
+       <width>24</width>
+       <height>22</height>
+      </rect>
+     </property>
+     <property name="text">
+      <string/>
+     </property>
+     <property name="checkable">
+      <bool>true</bool>
+     </property>
+     <property name="autoRaise">
+      <bool>true</bool>
+     </property>
+    </widget>
    </widget>
    <widget class="QWidget" name="enroll">
     <widget class="QLabel" name="enrollUserName">

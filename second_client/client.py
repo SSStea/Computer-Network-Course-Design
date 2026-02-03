@@ -1,15 +1,19 @@
 import sys, os, json, socket, threading
 from PySide6.QtWidgets import (
     QApplication, QStackedWidget, QPushButton, QLineEdit, QMessageBox,
-    QListWidget, QListWidgetItem, QTextEdit, QLabel, QWidget, QHBoxLayout
+    QListWidget, QListWidgetItem, QTextEdit, QLabel, QWidget, QHBoxLayout, QToolButton
 )
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtCore import QFile, QIODevice, QObject, Signal, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QAbstractItemView
+import ipaddress
+import re
 
 ui_path = r"D:\0_Computer_Network_Course_Design\second_client\client.ui"
 icon_path = r"D:\0_Computer_Network_Course_Design\second_client\icon.ico"
+eye_open = r"D:\0_Computer_Network_Course_Design\second_client\eye_open.ico"
+eye_close = r"D:\0_Computer_Network_Course_Design\second_client\eye_close.ico"
 
 def send_request(server_ip, server_port, req):
     with socket.create_connection((server_ip, server_port), timeout=5) as sock:
@@ -102,12 +106,19 @@ class MainWindow:
         self.serverIPEdit = self.window.findChild(QLineEdit, "serverIPEdit")
         self.serverPortEdit = self.window.findChild(QLineEdit, "serverPortEdit")
 
+        self.loginEyeButton = self.window.findChild(QToolButton, "loginEyeButton")
+        if self.userPwdEdit:
+            self.userPwdEdit.setEchoMode(QLineEdit.Password)
+        if self.loginEyeButton:
+            self.loginEyeButton.setCheckable(True)
+            self.loginEyeButton.setIcon(QIcon(eye_close))
+
         # 聊天页控件（index=2）
         self.chatListWidget = self.window.findChild(QListWidget, "chatListWidget")
         self.messageListWidget = self.window.findChild(QListWidget, "messageListWidget")
         self.inputTextEdit = self.window.findChild(QTextEdit, "inputTextEdit")
         self.sendMsgButton = self.window.findChild(QPushButton, "sendMsgButton")
-        self.chatTitleLabel = self.window.findChild(QLabel, "chatTitleLabel")  # 可选
+
 
         # 左侧用户列表：选中高亮（QSS）
         if self.chatListWidget:
@@ -143,11 +154,44 @@ class MainWindow:
         if self.chatListWidget:
             self.chatListWidget.itemClicked.connect(self.on_peer_clicked)
 
+        if self.loginEyeButton and self.userPwdEdit:
+            self.loginEyeButton.toggled.connect(
+                lambda checked: self.toggle_password(self.userPwdEdit, self.loginEyeButton, checked))
+
     def popUp(self, title, msg, ok=True):
         if ok:
             QMessageBox.information(self.window, title, msg)
         else:
             QMessageBox.warning(self.window, title, msg)
+
+    def isValidIp(self, IP):
+        s = (IP or "").strip()
+        try:
+            return ipaddress.ip_address(s).version == 4
+        except ValueError:
+            return False
+
+    def is_valid_username(self, username: str):
+        username = (username or "").strip()
+        if not username:
+            return False, "用户名不能为空"
+        # 不能以数字开头
+        if username[0].isdigit():
+            return False, "用户名不能以数字开头"
+        return True, ""
+
+    def is_strong_password(self, password: str):
+        password = password or ""
+        if len(password) < 6:
+            return False, "密码长度不能少于6位"
+        if not re.search(r"[A-Za-z]", password):
+            return False, "密码必须包含字母"
+        if not re.search(r"\d", password):
+            return False, "密码必须包含数字"
+        # 特殊字符：只要不是字母数字即可
+        if not re.search(r"[^A-Za-z0-9]", password):
+            return False, "密码必须包含特殊字符"
+        return True, ""
 
     def do_register(self):
         userName = (self.enrollUserNameEdit.text() if self.enrollUserNameEdit else "")
@@ -155,8 +199,17 @@ class MainWindow:
         serverIP = (self.enrollServerIPEdit.text() if self.enrollServerIPEdit else "")
         serverPort = int((self.enrollServerPortEdit.text() if self.enrollServerPortEdit else "0") or "0")
 
-        if not userName or not password:
-            self.popUp("注册失败", "用户名/密码不能为空", ok=False)
+        if not self.isValidIp(serverIP):
+            self.popUp("注册失败","服务器IP格式不合法", ok=False)
+
+        ok_u, msg_u = self.is_valid_username(userName)
+        if not ok_u:
+            self.popUp("注册失败", msg_u, ok=False)
+            return
+
+        ok_p, msg_p = self.is_strong_password(password)
+        if not ok_p:
+            self.popUp("注册失败", msg_p, ok=False)
             return
 
         try:
@@ -169,13 +222,17 @@ class MainWindow:
             if resp.get("ok"):
                 self.interfaceWidget.setCurrentIndex(0)
         except Exception as e:
-            self.popUp("网络错误", str(e), ok=False)
+            self.popUp("网络错误，请检查服务器IP", str(e), ok=False)
 
     def do_login(self):
         username = (self.userNameEdit.text() if self.userNameEdit else "").strip()
         password = (self.userPwdEdit.text() if self.userPwdEdit else "")
         serverIP = (self.serverIPEdit.text() if self.serverIPEdit else "").strip()
         serverPort = int((self.serverPortEdit.text() if self.serverPortEdit else "0") or "0")
+
+        if not self.isValidIp(serverIP):
+            self.popUp("登录失败","服务器IP格式不合法", ok=False)
+            return
 
         if not username or not password:
             self.popUp("登录失败", "用户名/密码不能为空", ok=False)
@@ -196,7 +253,23 @@ class MainWindow:
                 self.start_chat_connection(serverIP, serverPort)
 
         except Exception as e:
-            self.popUp("网络错误", str(e), ok=False)
+            self.popUp("网络错误，请检查服务器IP", str(e), ok=False)
+
+    def toggle_password(self, edit: QLineEdit, btn: QToolButton, checked: bool):
+        """
+        checked=True  -> 显示明文
+        checked=False -> 隐藏密码
+        """
+        if checked:
+            edit.setEchoMode(QLineEdit.Normal)
+            btn.setIcon(QIcon(eye_open))
+        else:
+            edit.setEchoMode(QLineEdit.Password)
+            btn.setIcon(QIcon(eye_close))
+
+        # 保持光标在末尾（体验更像微信/QQ）
+        edit.setFocus()
+        edit.setCursorPosition(len(edit.text()))
 
     # ====== 长连接 ======
     def start_chat_connection(self, server_ip, server_port):

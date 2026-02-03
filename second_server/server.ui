@@ -125,7 +125,7 @@
      <property name="title">
       <string>消息历史</string>
      </property>
-     <widget class="QTextEdit" name="messageHistoryEdit">
+     <widget class="QListWidget" name="messageHistoryWidget">
       <property name="geometry">
        <rect>
         <x>0</x>
