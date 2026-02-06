@@ -1,7 +1,8 @@
 import sys, os, json, socket, threading
 from PySide6.QtWidgets import (
     QApplication, QStackedWidget, QPushButton, QLineEdit, QMessageBox,
-    QListWidget, QListWidgetItem, QTextEdit, QLabel, QWidget, QHBoxLayout, QToolButton
+    QListWidget, QListWidgetItem, QTextEdit, QLabel, QWidget, QHBoxLayout, QToolButton,
+    QFileDialog
 )
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtCore import QFile, QIODevice, QObject, Signal, Qt
@@ -9,6 +10,9 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QAbstractItemView
 import ipaddress
 import re
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QUrl
+from datetime import datetime
 
 ui_path = r"D:\0_Computer_Network_Course_Design\second_client\client.ui"
 icon_path = r"D:\0_Computer_Network_Course_Design\second_client\icon.ico"
@@ -51,12 +55,22 @@ def recv_line(conn: socket.socket, buf: bytearray):
             return None
         buf.extend(chunk)
 
+def recv_exact(conn: socket.socket, size: int):
+    data = b""
+    while len(data) < size:
+        chunk = conn.recv(min(4096, size - len(data)))
+        if not chunk:
+            raise ConnectionError("文件接收中断")
+        data += chunk
+    return data
+
+
 def send_json(conn: socket.socket, obj: dict):
     conn.sendall((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
 
 class UiEmitter(QObject):
     users_update = Signal(list)            # list[dict]
-    msg_in = Signal(str, str, str)         # from, to, text
+    msg_in = Signal(str, str, object)         # from, to, text
     info = Signal(str)
 
 class MainWindow:
@@ -79,6 +93,8 @@ class MainWindow:
         self.emitter.users_update.connect(self.on_users_update)
         self.emitter.msg_in.connect(self.on_message_in)
         self.emitter.info.connect(lambda s: self.popUp("提示", s, ok=True))
+
+        self.last_msg_time = None
 
     def load_ui(self):
         loader = QUiLoader()
@@ -118,7 +134,9 @@ class MainWindow:
         self.messageListWidget = self.window.findChild(QListWidget, "messageListWidget")
         self.inputTextEdit = self.window.findChild(QTextEdit, "inputTextEdit")
         self.sendMsgButton = self.window.findChild(QPushButton, "sendMsgButton")
+        self.sendFileButton = self.window.findChild(QPushButton, "sendFileButton")
 
+        self.messageListWidget.setSpacing(3)
 
         # 左侧用户列表：选中高亮（QSS）
         if self.chatListWidget:
@@ -144,6 +162,8 @@ class MainWindow:
                 }
             """)
 
+        self.messageListWidget.itemDoubleClicked.connect(self.open_file)
+
     def bind_signals(self):
         self.loginButton.clicked.connect(self.do_login)
         self.enrollButton.clicked.connect(lambda: self.interfaceWidget.setCurrentIndex(1))
@@ -153,6 +173,8 @@ class MainWindow:
             self.sendMsgButton.clicked.connect(self.send_chat_message)
         if self.chatListWidget:
             self.chatListWidget.itemClicked.connect(self.on_peer_clicked)
+        if self.sendFileButton:
+            self.sendFileButton.clicked.connect(self.send_file)
 
         if self.loginEyeButton and self.userPwdEdit:
             self.loginEyeButton.toggled.connect(
@@ -330,6 +352,49 @@ class MainWindow:
                     text = msg.get("text", "")
                     self.emitter.msg_in.emit(_from, _to, text)
 
+
+                elif action == "file_meta":
+                    _from = msg.get("from", "")
+                    filename = msg.get("filename", "")
+                    filesize = int(msg.get("filesize", 0))
+                    save_path = os.path.join(
+                        os.path.expanduser("~/Downloads"), filename
+                    )
+                    try:
+                        remaining = filesize
+                        file_data = b""
+
+                        # ⭐ 先消耗 buf 里的残留（非常重要）
+                        if len(buf) > 0:
+                            take = min(len(buf), remaining)
+                            file_data += bytes(buf[:take])
+                            del buf[:take]
+                            remaining -= take
+
+                        # ⭐ 再从 socket 收剩余
+                        while remaining > 0:
+                            chunk = self.sock.recv(min(4096, remaining))
+                            if not chunk:
+                                raise ConnectionError("文件接收中断")
+                            file_data += chunk
+                            remaining -= len(chunk)
+
+                        with open(save_path, "wb") as f:
+                            f.write(file_data)
+
+                        self.emitter.msg_in.emit(
+                            _from,
+                            self.username,
+                            {
+                                "type": "file",
+                                "filename": filename,
+                                "path": save_path,
+                                "is_me": False
+                            }
+                        )
+                    except Exception as e:
+                        self.emitter.info.emit(f"接收文件失败：{e}")
+
                 else:
                     # 可能是 {"ok":true,"msg":"已上线"} 这种确认包，忽略即可
                     pass
@@ -365,19 +430,27 @@ class MainWindow:
             online = "在线" if s["online"] else "离线"
             last = ""
             if s["messages"]:
-                last = s["messages"][-1][1]
+                last_msg = s["messages"][-1]
+
+                # ===== 文件消息 =====
+                if isinstance(last_msg, dict):
+                    last = f"[文件] {last_msg.get('filename', '')}"
+                else:
+                    last = last_msg[1]
+
                 if len(last) > 12:
                     last = last[:12] + "..."
+
             text = f"{peer}  [{online}]"
             if unread > 0:
                 text += f"  ({unread})"
             if last:
                 text += f"\n{last}"
 
-            if online == "在线":
-                item = QListWidgetItem(text)
-                item.setData(Qt.UserRole, peer)
-                self.chatListWidget.addItem(item)
+            # if online == "在线":
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, peer)
+            self.chatListWidget.addItem(item)
 
         if self.current_peer is None and self.chatListWidget.count() > 0:
             self.chatListWidget.setCurrentRow(0)
@@ -397,11 +470,6 @@ class MainWindow:
         if peer in self.sessions:
             self.sessions[peer]["unread"] = 0
 
-        # if self.chatTitleLabel:
-        #     ip = self.sessions.get(peer, {}).get("ip", "")
-        #     online = self.sessions.get(peer, {}).get("online", False)
-        #     self.chatTitleLabel.setText(f"当前聊天：{peer}  {'在线' if online else '离线'}  {ip}")
-
         self.refresh_message_view(peer)
         # 刷新左侧（更新未读显示）
         self.on_users_update([
@@ -415,13 +483,14 @@ class MainWindow:
             return
         self.messageListWidget.clear()
         msgs = self.sessions.get(peer, {}).get("messages", [])
-        for is_me, text in msgs:
-            self.add_message_bubble(text, is_me)
+        for m in msgs:
+            if isinstance(m, dict):
+                self.add_message_bubble(m)
+            else:
+                is_me, text = m
+                self.add_message_bubble(text, is_me)
 
-    def add_message_bubble(self, text: str, is_me: bool):
-        if self.messageListWidget is None:
-            return
-
+    def add_message_bubble(self, msg, is_me=None):
         item = QListWidgetItem()
         item.setFlags(item.flags() ^ Qt.ItemIsSelectable)
 
@@ -429,22 +498,41 @@ class MainWindow:
         layout = QHBoxLayout(w)
         layout.setContentsMargins(10, 2, 10, 2)
 
-        bubble = QLabel(text)
-        bubble.setWordWrap(True)
-        bubble.setMaximumWidth(360)
+        # ===== 文件消息 =====
+        if isinstance(msg, dict) and msg.get("type") == "file":
+            filename = msg["filename"]
+            path = msg["path"]
+            is_me = msg["is_me"]
 
-        if is_me:
+            bubble = QLabel(f"📄 {filename}\n双击打开")
+            bubble.setWordWrap(True)
+            bubble.setStyleSheet("""
+                QLabel{
+                    padding:10px;
+                    border-radius:10px;
+                    background:#E8F0FE;
+                    border:1px solid #C3D3F5;
+                }
+            """)
+
+            # ⭐ 关键：把文件路径绑在 item 上
+            print("path:", path)
+            item.setData(Qt.UserRole, path)
+
+
+        # ===== 普通文本消息 =====
+        else:
+            text = msg if isinstance(msg, str) else msg[1]
+            bubble = QLabel(text)
+            bubble.setWordWrap(True)
+            bubble.setMaximumWidth(360)
             bubble.setStyleSheet("""
                 QLabel{
                     padding:8px 10px;
                     border-radius:10px;
                     background:#DCF8C6;
                 }
-            """)
-            layout.addStretch()
-            layout.addWidget(bubble)
-        else:
-            bubble.setStyleSheet("""
+            """ if is_me else """
                 QLabel{
                     padding:8px 10px;
                     border-radius:10px;
@@ -452,8 +540,22 @@ class MainWindow:
                     border:1px solid #E5E5E5;
                 }
             """)
+
+        if is_me:
+            layout.addStretch()
+            layout.addWidget(bubble)
+        else:
             layout.addWidget(bubble)
             layout.addStretch()
+
+        now = datetime.now()
+
+        # 判断是否需要显示时间
+        if self.last_msg_time is None or (now - self.last_msg_time).total_seconds() >= 120:
+            time_str = now.strftime("%H:%M")
+            self.add_time_item(time_str)
+
+        self.last_msg_time = now
 
         self.messageListWidget.addItem(item)
         self.messageListWidget.setItemWidget(item, w)
@@ -461,7 +563,18 @@ class MainWindow:
         self.messageListWidget.scrollToBottom()
 
     # ====== 收到消息 ======
-    def on_message_in(self, _from: str, _to: str, text: str):
+    def on_message_in(self, _from: str, _to: str, data):
+        if isinstance(data, dict) and data.get("type") == "file":
+            text = f"[文件] {data.get('filename')}"
+            msg = {
+                "type": "file",
+                "is_me": False,
+                "filename": data.get('filename'),
+                "path": data.get('path'),
+            }
+        else:
+            text = data
+
         peer = _from if _from != self.username else _to
         self.sessions.setdefault(peer, {"messages": [], "unread": 0, "online": True, "ip": ""})
 
@@ -469,7 +582,10 @@ class MainWindow:
         self.sessions[peer]["messages"].append((is_me, text))
 
         if self.current_peer == peer:
-            self.add_message_bubble(text, is_me)
+            if isinstance(data, dict) and data.get("type") == "file":
+                self.add_message_bubble(msg, is_me)
+            else:
+                self.add_message_bubble(text, is_me)
         else:
             self.sessions[peer]["unread"] += 1
 
@@ -508,6 +624,77 @@ class MainWindow:
 
         except Exception as e:
             self.popUp("发送失败", str(e), ok=False)
+
+    def send_file(self):
+        if not self.sock or not self.current_peer:
+            self.popUp("发送失败", "未选择聊天对象", ok=False)
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self.window, "选择要发送的文件", "", "All Files (*)"
+        )
+        if not path:
+            return
+
+        filename = os.path.basename(path)
+        filesize = os.path.getsize(path)
+
+        try:
+            # 1️⃣ 先发 meta
+            send_json(self.sock, {
+                "action": "file_meta",
+                "from": self.username,
+                "to": self.current_peer,
+                "filename": filename,
+                "filesize": filesize
+            })
+
+            # 2️⃣ 再发文件内容
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(4096)
+                    if not chunk:
+                        break
+                    self.sock.sendall(chunk)
+
+            # 本地显示
+            msg = {
+                "type": "file",
+                "is_me": True,
+                "filename": filename,
+                "path": path
+            }
+            self.sessions[self.current_peer]["messages"].append(msg)
+            self.add_message_bubble(msg)
+
+        except Exception as e:
+            self.popUp("发送失败", str(e), ok=False)
+
+    def open_file(self, item: QListWidgetItem):
+        path = item.data(Qt.UserRole)
+        if path == None:
+            return
+        if path and os.path.exists(path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        else:
+            QMessageBox.warning(self.window, "无法打开", "文件不存在或已被删除")
+
+    def add_time_item(self, time_text):
+        item = QListWidgetItem()
+
+        label = QLabel(time_text)
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("""
+            QLabel {
+                color: #888;
+                background: transparent;
+                padding: 4px;
+            }
+        """)
+
+        item.setSizeHint(label.sizeHint())
+        self.messageListWidget.addItem(item)
+        self.messageListWidget.setItemWidget(item, label)
 
 
 app = QApplication(sys.argv)

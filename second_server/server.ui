@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>704</width>
-    <height>422</height>
+    <width>928</width>
+    <height>463</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -18,8 +18,8 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>701</width>
-     <height>421</height>
+     <width>921</width>
+     <height>451</height>
     </rect>
    </property>
    <widget class="QWidget" name="Server">
@@ -113,8 +113,8 @@
       <rect>
        <x>18</x>
        <y>60</y>
-       <width>351</width>
-       <height>331</height>
+       <width>541</width>
+       <height>391</height>
       </rect>
      </property>
      <property name="font">
@@ -130,8 +130,8 @@
        <rect>
         <x>0</x>
         <y>20</y>
-        <width>351</width>
-        <height>311</height>
+        <width>541</width>
+        <height>371</height>
        </rect>
       </property>
      </widget>
@@ -149,10 +149,10 @@
     <widget class="QGroupBox" name="userListBox">
      <property name="geometry">
       <rect>
-       <x>388</x>
+       <x>570</x>
        <y>60</y>
-       <width>301</width>
-       <height>331</height>
+       <width>351</width>
+       <height>391</height>
       </rect>
      </property>
      <property name="font">
@@ -168,8 +168,8 @@
        <rect>
         <x>0</x>
         <y>20</y>
-        <width>301</width>
-        <height>311</height>
+        <width>351</width>
+        <height>371</height>
        </rect>
       </property>
       <column>

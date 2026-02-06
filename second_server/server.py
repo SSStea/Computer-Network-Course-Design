@@ -94,6 +94,16 @@ def recv_line(conn: socket.socket, buf: bytearray):
             return None
         buf.extend(chunk)
 
+def recv_exact(conn: socket.socket, size: int):
+    data = b""
+    while len(data) < size:
+        chunk = conn.recv(min(4096, size - len(data)))
+        if not chunk:
+            raise ConnectionError("接收文件中断")
+        data += chunk
+    return data
+
+
 # ====== UI信号 ======
 class UIEmitter(QObject):
     init_users = Signal(list)          # [(username, status, ip), ...]
@@ -136,6 +146,10 @@ class MainWindow:
         self.userListWidget = self.window.findChild(QTableWidget, "userListWidget")
         self.userListWidget.setColumnCount(3)
         self.userListWidget.setHorizontalHeaderLabels(["用户名", "状态", "IP"])
+
+        self.userListWidget.setColumnWidth(0,80)
+        self.userListWidget.setColumnWidth(1, 80)
+        self.userListWidget.setColumnWidth(2, 165)
 
         self.messageHistoryWidget = self.window.findChild(QListWidget, "messageHistoryWidget")
 
@@ -341,6 +355,49 @@ class MainWindow:
                     else:
                         send_json(conn, {"ok": False, "msg": "对方不在线"})
                         self.log_event(_from, f"给{_to}发送失败（对方不在线）")
+
+                elif action == "file_meta":
+                    _from = req.get("from", "")
+                    _to = req.get("to", "")
+                    filename = req.get("filename", "")
+                    filesize = int(req.get("filesize", 0))
+
+                    if not _from or not _to or not filename or filesize <= 0:
+                        send_json(conn, {"ok": False, "msg": "文件参数错误"})
+                        continue
+
+                    self.log_event(_from, f"准备向 {_to} 发送文件 {filename} ({filesize} bytes)")
+
+                    with self.lock:
+                        target_conn = self.online_conns.get(_to)
+
+                    if not target_conn:
+                        send_json(conn, {"ok": False, "msg": "对方不在线"})
+                        continue
+
+                    try:
+                        # 1. 转发 meta
+                        send_json(target_conn, {
+                            "action": "file_meta",
+                            "from": _from,
+                            "to": _to,
+                            "filename": filename,
+                            "filesize": filesize
+                        })
+
+                        # 2. 接收文件内容
+                        file_bytes = recv_exact(conn, filesize)
+
+                        # 3. 转发文件内容
+                        target_conn.sendall(file_bytes)
+
+                        send_json(conn, {"ok": True, "msg": "文件已发送"})
+                        self.log_event(_from, f"文件 {filename} 已发送给 {_to}")
+
+                    except Exception as e:
+                        self.log_event(_from, f"文件发送失败：{e}")
+                        self.mark_offline(_to)
+
 
                 else:
                     send_json(conn, {"ok": False, "msg": "未知action"})
